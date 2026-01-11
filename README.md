@@ -53,6 +53,3 @@ On Windows run the produced `earth-wallpaper.exe`.
 ## License & Notes
 
 This project bundles public Himawari tiles fetched from the provider. Respect the data provider's terms of use.
-
----
-Generated README — modify to add badges, license text, or CI instructions as needed.
