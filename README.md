@@ -43,7 +43,6 @@ On Windows run the produced `earth-wallpaper.exe`.
 ## Configuration & files
 
 - The assembled wallpaper is saved to the system temp folder as `earth_wallpaper_full.png` before being applied.
-- Border thickness default is implemented in code; the tray menu allows runtime adjustment.
 
 ## Troubleshooting
 

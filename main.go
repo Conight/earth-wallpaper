@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
-	"image/color"
 	"image/draw"
 	"image/png"
 	"io"
@@ -15,8 +14,6 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-
-	xdraw "golang.org/x/image/draw"
 
 	"earth-wallpaper/icon"
 	"earth-wallpaper/wallpaper"
@@ -34,7 +31,6 @@ var (
 
 const resolution int = 4
 const tileSize = 550
-const borderThickness = 300
 
 func downloadImage(resolution, i, j int, t time.Time) image.Image {
 	var year, month, day, hour, minute, second string
@@ -57,31 +53,40 @@ func downloadImage(resolution, i, j int, t time.Time) image.Image {
 	url := fmt.Sprintf("https://anzu.shinshu-u.ac.jp/himawari/img/D531106/%dd/550/%s/%s/%s/%s_%d_%d.png", resolution, year, month, day, timeStr, i, j)
 	resp, err := http.Get(url)
 	if err != nil {
-		panic(err)
+		log.Printf("downloadImage: http get error for %s: %v", url, err)
+		// return a blank placeholder tile so the final image stays complete
+		return image.NewRGBA(image.Rect(0, 0, tileSize, tileSize))
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("downloadImage: non-200 status %d for %s", resp.StatusCode, url)
+		return image.NewRGBA(image.Rect(0, 0, tileSize, tileSize))
+	}
 
 	var buf bytes.Buffer
 	_, err = io.Copy(&buf, resp.Body)
 	if err != nil {
-		panic(err)
+		log.Printf("downloadImage: read body error for %s: %v", url, err)
+		return image.NewRGBA(image.Rect(0, 0, tileSize, tileSize))
 	}
 
 	img, err := png.Decode(&buf)
 	if err != nil {
-		panic(err)
+		log.Printf("downloadImage: png decode error for %s: %v", url, err)
+		return image.NewRGBA(image.Rect(0, 0, tileSize, tileSize))
 	}
 	return img
 }
 
 func setWallpaper(fullImagePath string) {
-	// set wallpaper
+	// set wallpaper mode first, then apply the wallpaper
+	wallpaper.SetMode(modes.FILL_ORIGINAL)
 	err := wallpaper.SetWallpaper(fullImagePath)
 	if err != nil {
 		log.Printf("setWallpaper error: %v", err)
 		return
 	}
-	wallpaper.SetMode(modes.FILL_ZOOM)
 }
 
 // startFetcher runs a loop to fetch latest image info immediately and then every 10s.
@@ -148,28 +153,10 @@ func processWallpaper(t time.Time) string {
 	for i := range gridSize {
 		for j := range gridSize {
 			img := downloadImage(resolution, i, j, t)
-			draw.Draw(canvas, image.Rect(i*tileSize, j*tileSize, (i+1)*tileSize, (j+1)*tileSize), img, image.Point{0, 0}, draw.Src)
+			dest := image.Rect(i*tileSize, j*tileSize, (i+1)*tileSize, (j+1)*tileSize)
+			draw.Draw(canvas, dest, img, image.Point{0, 0}, draw.Src)
 		}
 	}
-
-	// compose final image: black background with the assembled image scaled to fit inside
-	border := borderThickness
-	w := gridSize * tileSize
-	h := gridSize * tileSize
-
-	final := image.NewRGBA(image.Rect(0, 0, w, h))
-	// fill black background
-	draw.Draw(final, final.Bounds(), image.NewUniform(color.Black), image.Point{}, draw.Src)
-
-	// compute destination rect (inset by border)
-	dstRect := image.Rect(border, border, w-border+50, h-border-50)
-	if dstRect.Dx() <= 0 || dstRect.Dy() <= 0 {
-		// border too large, fallback to no border
-		dstRect = final.Bounds()
-	}
-
-	// scale assembled canvas into dstRect using high-quality scaler
-	xdraw.CatmullRom.Scale(final, dstRect, canvas, canvas.Bounds(), draw.Over, nil)
 
 	// save full image to system temp folder
 	tempDir := os.TempDir()
@@ -180,10 +167,10 @@ func processWallpaper(t time.Time) string {
 		return ""
 	}
 	defer outFile.Close()
-	if err := png.Encode(outFile, final); err != nil {
+	if err := png.Encode(outFile, canvas); err != nil {
 		log.Printf("processWallpaper: failed to encode png: %v", err)
 	}
-	fmt.Println("Wallpaper save to:", fullImagePath)
+	log.Printf("Wallpaper save to: %s", fullImagePath)
 	return fullImagePath
 }
 
@@ -191,7 +178,7 @@ func addQuitItem() {
 	mQuit := systray.AddMenuItem("Quit", "Quit the whole app")
 	go func() {
 		for range mQuit.ClickedCh {
-			fmt.Println("Requesting quit")
+			log.Printf("Requesting quit")
 			systray.Quit()
 		}
 	}()
@@ -199,8 +186,8 @@ func addQuitItem() {
 
 func onReady() {
 	systray.SetTemplateIcon(icon.Data, icon.Data)
-	systray.SetTitle("Awesome App")
-	systray.SetTooltip("Lantern")
+	systray.SetTitle("Earth Wallpaper")
+	systray.SetTooltip("Live wallpaper from Himawari 8 satellite")
 	addQuitItem()
 	systray.AddSeparator()
 
@@ -218,7 +205,9 @@ func onReady() {
 
 		// Initialize latest image fetching
 		stopCh = make(chan bool)
+		log.Printf("Start 00")
 		go startFetcher(stopCh, mLatestImageDate)
+		log.Printf("Start 01")
 
 		// Toggle latest image fetching handler
 		go func() {
@@ -233,7 +222,9 @@ func onReady() {
 					stopCh = make(chan bool)
 					mLatestImageStatus.SetTitle("Latest Image: Running")
 
+					log.Printf("Start 02")
 					go startFetcher(stopCh, mLatestImageDate)
+					log.Printf("Start 03")
 				}
 			}
 		}()
@@ -266,16 +257,16 @@ func latestImage() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	fmt.Println("Latest image date:", data.Date)
+	log.Printf("Latest image date: %s", data.Date)
 	return data.Date, nil
 }
 
 func main() {
 	onExit := func() {
 		now := time.Now()
-		fmt.Println("Exit at", now.String())
+		log.Printf("Exit at %s", now.String())
 	}
 
 	systray.Run(onReady, onExit)
-	fmt.Println("Finished quitting")
+	log.Printf("Finished quitting")
 }
