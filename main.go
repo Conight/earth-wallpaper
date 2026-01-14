@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
+	"image/color"
 	"image/draw"
 	"image/png"
 	"io"
@@ -31,6 +32,7 @@ var (
 
 const resolution int = 4
 const tileSize = 550
+const border = 180 // pixels of black padding on each side; adjust as needed
 
 func downloadImage(resolution, i, j int, t time.Time) image.Image {
 	var year, month, day, hour, minute, second string
@@ -158,7 +160,18 @@ func processWallpaper(t time.Time) string {
 		}
 	}
 
-	// save full image to system temp folder
+	// add a uniform black border to avoid distortion when displayed
+	srcW := canvas.Bounds().Dx()
+	srcH := canvas.Bounds().Dy()
+	dstW := srcW + border*2
+	dstH := srcH + border*2
+	bordered := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
+	// fill with black
+	draw.Draw(bordered, bordered.Bounds(), &image.Uniform{C: color.Black}, image.Point{}, draw.Src)
+	// draw original canvas centered with the border offset
+	draw.Draw(bordered, image.Rect(border, border, border+srcW, border+srcH), canvas, image.Point{0, 0}, draw.Src)
+
+	// save bordered image to system temp folder
 	tempDir := os.TempDir()
 	fullImagePath := filepath.Join(tempDir, "earth_wallpaper_full.png")
 	outFile, err := os.Create(fullImagePath)
@@ -167,7 +180,7 @@ func processWallpaper(t time.Time) string {
 		return ""
 	}
 	defer outFile.Close()
-	if err := png.Encode(outFile, canvas); err != nil {
+	if err := png.Encode(outFile, bordered); err != nil {
 		log.Printf("processWallpaper: failed to encode png: %v", err)
 	}
 	log.Printf("Wallpaper save to: %s", fullImagePath)
