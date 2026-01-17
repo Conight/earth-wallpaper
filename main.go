@@ -34,6 +34,12 @@ const resolution int = 4
 const tileSize = 550
 const border = 180 // pixels of black padding on each side; adjust as needed
 
+// tileResult holds the result of a downloaded tile image
+type tileResult struct {
+	x, y int
+	img  image.Image
+}
+
 func downloadImage(resolution, i, j int, t time.Time) image.Image {
 	var year, month, day, hour, minute, second string
 
@@ -151,14 +157,39 @@ func startFetcher(stopCh chan bool, mLatestImageDate *systray.MenuItem) {
 
 func processWallpaper(t time.Time) string {
 	gridSize := resolution
+	// create a new blank canvas
 	canvas := image.NewRGBA(image.Rect(0, 0, gridSize*tileSize, gridSize*tileSize))
-	for i := range gridSize {
-		for j := range gridSize {
-			img := downloadImage(resolution, i, j, t)
-			dest := image.Rect(i*tileSize, j*tileSize, (i+1)*tileSize, (j+1)*tileSize)
-			draw.Draw(canvas, dest, img, image.Point{0, 0}, draw.Src)
+
+	log.Printf("Start parallel download image")
+	start_time := time.Now()
+
+	results := make(chan tileResult, gridSize*gridSize)
+	var wg sync.WaitGroup
+
+	for i := 0; i < gridSize; i++ {
+		for j := 0; j < gridSize; j++ {
+			wg.Add(1)
+			go func(x, y int) {
+				defer wg.Done()
+				img := downloadImage(resolution, x, y, t)
+				results <- tileResult{x: x, y: y, img: img}
+			}(i, j)
 		}
 	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	count := 0
+	for res := range results {
+		dest := image.Rect(res.x*tileSize, res.y*tileSize, (res.x+1)*tileSize, (res.y+1)*tileSize)
+		draw.Draw(canvas, dest, res.img, image.Point{0, 0}, draw.Src)
+		count++
+	}
+
+	log.Printf("End download image, processed %d tiles, took %d ms", count, time.Since(start_time).Milliseconds())
 
 	// add a uniform black border to avoid distortion when displayed
 	srcW := canvas.Bounds().Dx()
@@ -166,6 +197,7 @@ func processWallpaper(t time.Time) string {
 	dstW := srcW + border*2
 	dstH := srcH + border*2
 	bordered := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
+
 	// fill with black
 	draw.Draw(bordered, bordered.Bounds(), &image.Uniform{C: color.Black}, image.Point{}, draw.Src)
 	// draw original canvas centered with the border offset
@@ -180,9 +212,12 @@ func processWallpaper(t time.Time) string {
 		return ""
 	}
 	defer outFile.Close()
-	if err := png.Encode(outFile, bordered); err != nil {
+
+	enc := png.Encoder{CompressionLevel: png.NoCompression}
+	if err := enc.Encode(outFile, bordered); err != nil {
 		log.Printf("processWallpaper: failed to encode png: %v", err)
 	}
+
 	log.Printf("Wallpaper save to: %s", fullImagePath)
 	return fullImagePath
 }
@@ -218,9 +253,7 @@ func onReady() {
 
 		// Initialize latest image fetching
 		stopCh = make(chan bool)
-		log.Printf("Start 00")
 		go startFetcher(stopCh, mLatestImageDate)
-		log.Printf("Start 01")
 
 		// Toggle latest image fetching handler
 		go func() {
@@ -235,9 +268,7 @@ func onReady() {
 					stopCh = make(chan bool)
 					mLatestImageStatus.SetTitle("Latest Image: Running")
 
-					log.Printf("Start 02")
 					go startFetcher(stopCh, mLatestImageDate)
-					log.Printf("Start 03")
 				}
 			}
 		}()

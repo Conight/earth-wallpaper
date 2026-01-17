@@ -23,7 +23,9 @@ Live desktop wallpaper that fetches Himawari-8 satellite imagery, assembles tile
     # Unix
     go build -o earth-wallpaper
     # Windows
-    go build -ldflags -H=windowsgui -o earth-wallpaper.exe
+    go build -ldflags "-s -w -H=windowsgui" -o earth-wallpaper.exe
+    # Optional
+    upx -9 earth-wallpaper.exe
     ```
 
 2. Run locally (shows tray icon):
